@@ -49,7 +49,6 @@ cfg.debugTrainN = 100;
 cfg.debugValN   = 10;
 cfg.debugTestN  = 10;
 cfg.debugSubsetMode = 'head';      % 'head' (take first N) or 'random'
-cfg.numEpochs   = 10;               % override for quick runs
 % Optimizer selection: 'adamw' or 'mvr2'
 cfg.optimizer   = 'adamw';
 
@@ -89,6 +88,7 @@ logMsg(sprintf('Classes (%d): %s', numel(classNames), strjoin(classNames(:).', '
 
 % Apply tiny subset for quick debugging
 if cfg.debugSubset
+    cfg.numEpochs   = 10;               % override for quick runs
     nTr = safeNumObs(dsTrain);
     nVa = safeNumObs(dsVal);
     nTe = safeNumObs(dsTest);
