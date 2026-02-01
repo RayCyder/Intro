@@ -29,3 +29,14 @@ end
 
 net = setLearnablesValue(net, L);
 end
+
+function net = setLearnablesValue(net, learnables)
+%setLearnablesValue  Replace learnable parameter values in a dlnetwork.
+%
+% Some MATLAB versions/examples provide this as a helper. We implement it here
+% to avoid relying on an external function.
+%
+% learnables is a table matching net.Learnables (with a Value column).
+
+net = dlupdate(@(~, v) v, net, learnables);
+end
