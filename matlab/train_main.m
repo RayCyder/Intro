@@ -40,8 +40,16 @@ cfg.evalOnTest   = true;                       % whether to also evaluate on tes
 cfg.printPerClass = false;                     % per-class metrics on val/test (slower, prints a lot)
 cfg.saveHistory  = true;                       % save losses/accs to .mat at end
 cfg.plotHistory  = true;                       % plot curves at end
+
 cfg.outDir       = fullfile(pwd,'runs');       % where to save history
 
+% Quick debug subset (to validate the pipeline fast)
+cfg.debugSubset = false;           % set true to use tiny datasets
+cfg.debugTrainN = 100;
+cfg.debugValN   = 10;
+cfg.debugTestN  = 10;
+cfg.debugSubsetMode = 'head';      % 'head' (take first N) or 'random'
+cfg.numEpochs   = 10;               % override for quick runs
 % Optimizer selection: 'adamw' or 'mvr2'
 cfg.optimizer   = 'adamw';
 
@@ -76,7 +84,33 @@ else
     logMsg('Dataset sizes: (NumObservations unavailable)');
 end
 
+
 logMsg(sprintf('Classes (%d): %s', numel(classNames), strjoin(classNames(:).', ', ')));
+
+% Apply tiny subset for quick debugging
+if cfg.debugSubset
+    nTr = safeNumObs(dsTrain);
+    nVa = safeNumObs(dsVal);
+    nTe = safeNumObs(dsTest);
+
+    if strcmpi(cfg.debugSubsetMode,'random')
+        utils.setSeed(888);
+        idxTr = randperm(nTr, min(cfg.debugTrainN, nTr));
+        idxVa = randperm(nVa, min(cfg.debugValN,   nVa));
+        idxTe = randperm(nTe, min(cfg.debugTestN,  nTe));
+    else
+        idxTr = 1:min(cfg.debugTrainN, nTr);
+        idxVa = 1:min(cfg.debugValN,   nVa);
+        idxTe = 1:min(cfg.debugTestN,  nTe);
+    end
+
+    dsTrain = subset(dsTrain, idxTr);
+    dsVal   = subset(dsVal,   idxVa);
+    dsTest  = subset(dsTest,  idxTe);
+
+    logMsg(sprintf('DEBUG subset enabled (%s): train=%d, val=%d, test=%d', ...
+        cfg.debugSubsetMode, safeNumObs(dsTrain), safeNumObs(dsVal), safeNumObs(dsTest)));
+end
 
 % Training-only augmentation (PyTorch-aligned): RandomCrop(32,pad=4) + RandomHorizontalFlip
 augTrain = data.cifar10Augmenter('OutputSize', [32 32], 'Padding', 4, 'FlipProb', 0.5);
@@ -202,9 +236,9 @@ for epoch = 1:cfg.numEpochs
             netOld = net;
         end
 
-        % compute loss and grads
+        % compute loss, grads, and logits (for train accuracy)
         try
-            [loss, grads] = dlfeval(@train.modelGradients, net, X, T);
+            [loss, grads, logits] = dlfeval(@train.modelGradients, net, X, T);
         catch ME
             logMsg('ERROR during modelGradients');
             logMsg(sprintf('  message: %s', ME.message));
@@ -224,7 +258,8 @@ for epoch = 1:cfg.numEpochs
         epochNumBatches = epochNumBatches + 1;
 
         % --- Train accuracy accumulation (printed once per epoch) ---
-        logitsAcc = forward(net, X);
+        % Use logits returned by train.modelGradients to avoid an extra forward pass.
+        logitsAcc = logits;
         if ndims(logitsAcc) == 4
             logitsAcc = squeeze(logitsAcc);
         end
@@ -276,24 +311,24 @@ for epoch = 1:cfg.numEpochs
 
     logMsg('Running evaluation (val/test)...');
 
-    % Overall metrics (val)
-    [valAcc, valLoss] = utils.evaluate(net, mbqVal, useGPU);
-
-    % Optionally also compute test metrics
-    if cfg.evalOnTest
-        [testAcc, testLoss] = utils.evaluate(net, mbqTest, useGPU);
-    else
-        testAcc = NaN; testLoss = NaN;
-    end
-
-    % Optional per-class printing ONLY for val/test
+    % ---- Validation metrics (single pass) ----
     if cfg.printPerClass
         fprintf('Validation per-class metrics:\n');
-        utils.evaluatePerClass(net, mbqVal, useGPU, classNames);
-        if cfg.evalOnTest
+        [valAcc, valLoss] = utils.evaluatePerClass(net, mbqVal, useGPU, classNames);
+    else
+        [valAcc, valLoss] = utils.evaluate(net, mbqVal, useGPU);
+    end
+
+    % ---- Test metrics (single pass, optional) ----
+    if cfg.evalOnTest
+        if cfg.printPerClass
             fprintf('Test per-class metrics:\n');
-            utils.evaluatePerClass(net, mbqTest, useGPU, classNames);
+            [testAcc, testLoss] = utils.evaluatePerClass(net, mbqTest, useGPU, classNames);
+        else
+            [testAcc, testLoss] = utils.evaluate(net, mbqTest, useGPU);
         end
+    else
+        testAcc = NaN; testLoss = NaN;
     end
 
     % Record history for plotting
