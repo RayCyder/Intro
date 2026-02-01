@@ -185,7 +185,11 @@ function [X, T] = preprocessMiniBatchAny(X, Y, classNames, cfg)
         error('Found undefined labels in mini-batch. Check classNames alignment.');
     end
 
-    T = onehotencode(Y, 1, 'ClassNames', classNames);
+    % onehotencode expands along a singleton dimension. Y is typically Bx1, so expand along dim=2
+    % to get BxK, then transpose to KxB for 'CB' format.
+    Y = Y(:);  % ensure column
+    T = onehotencode(Y, 2, 'ClassNames', classNames);  % BxK
+    T = T.';   % KxB
 
     T = dlarray(single(T), 'CB');
 
