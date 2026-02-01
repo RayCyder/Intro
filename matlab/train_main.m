@@ -149,7 +149,25 @@ function [X, T] = preprocessMiniBatchAny(X, Y, classNames, cfg)
 
     X = dlarray(X, 'SSCB');
 
-    % Labels may already be categorical (from arrayDatastore). Only convert if needed.
+    % ---- Robust label handling for different minibatchqueue outputs ----
+    % From arrayDatastore of categorical scalars, minibatchqueue may return Y as a cell array.
+    if iscell(Y)
+        if isempty(Y)
+            Y = categorical([], classNames);
+        elseif all(cellfun(@iscategorical, Y))
+            % Cell array of scalar categoricals -> convert to cellstr of names
+            Y = categorical(cellfun(@char, Y, 'UniformOutput', false), classNames);
+        elseif all(cellfun(@isnumeric, Y))
+            % Cell array of numeric scalars (0..9)
+            Yn = cell2mat(Y);
+            Y = categorical(classNames(double(Yn)+1), classNames);
+        else
+            % Assume cellstr / string-like
+            Y = categorical(Y, classNames);
+        end
+    end
+
+    % If still not categorical, convert.
     if ~iscategorical(Y)
         if isnumeric(Y)
             % CIFAR-10 numeric labels are typically 0..9
@@ -159,14 +177,15 @@ function [X, T] = preprocessMiniBatchAny(X, Y, classNames, cfg)
         end
     end
 
-    % Ensure category set/order matches classNames
-    Y = categorical(Y, classNames);
-
-    T = onehotencode(Y, 1, 'ClassNames', classNames);
+    % Ensure category set and order matches classNames without re-constructing categoricals.
+    Y = setcats(Y, classNames);
+    Y = reordercats(Y, classNames);
 
     if any(isundefined(Y))
         error('Found undefined labels in mini-batch. Check classNames alignment.');
     end
+
+    T = onehotencode(Y, 1, 'ClassNames', classNames);
 
     T = dlarray(single(T), 'CB');
 
