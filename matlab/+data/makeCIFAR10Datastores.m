@@ -23,8 +23,8 @@ function [dsTrain, dsVal, dsTest, classNames] = makeCIFAR10Datastores(rootDir, v
 %   - Labels are returned as categorical with categories = classNames.
 
 p = inputParser;
-addParameter(p, "ValRatio", 0.1);
-addParameter(p, "Seed", 888);
+addParameter(p, 'ValRatio', 0.1);
+addParameter(p, 'Seed', 888);
 parse(p, varargin{:});
 valRatio = p.Results.ValRatio;
 seed = p.Results.Seed;
@@ -34,19 +34,19 @@ if ~isfolder(rootDir)
     mkdir(rootDir);
 end
 
-url = "https://www.cs.toronto.edu/~kriz/cifar-10-matlab.tar.gz";
-out = fullfile(rootDir, "cifar-10-matlab.tar.gz");
+url = 'https://www.cs.toronto.edu/~kriz/cifar-10-matlab.tar.gz';
+out = fullfile(rootDir, 'cifar-10-matlab.tar.gz');
 if ~isfile(out)
     websave(out, url);
 end
 
-cifarMatDir = fullfile(rootDir, "cifar-10-batches-mat");
+cifarMatDir = fullfile(rootDir, 'cifar-10-batches-mat');
 if ~isfolder(cifarMatDir)
     untar(out, rootDir);   % extracts cifar-10-batches-mat
 end
 
 % Read class names
-meta = load(fullfile(cifarMatDir, "batches.meta.mat"), "label_names");
+meta = load(fullfile(cifarMatDir, 'batches.meta.mat'), 'label_names');
 classNames = cellstr(meta.label_names);
 
 % Load all training batches into arrays
@@ -78,19 +78,19 @@ valY_ = trainY(valIdx);
 % X datastore iterates along 4th dim (batch dimension)
 % Y datastore iterates along rows
 
-dsTrain = combine(
-    arrayDatastore(trainX_, "IterationDimension", 4), ...
-    arrayDatastore(trainY_)
+dsTrain = combine( ...
+    arrayDatastore(trainX_, 'IterationDimension', 4), ...
+    arrayDatastore(trainY_) ...
 );
 
-dsVal = combine(
-    arrayDatastore(valX_, "IterationDimension", 4), ...
-    arrayDatastore(valY_)
+dsVal = combine( ...
+    arrayDatastore(valX_, 'IterationDimension', 4), ...
+    arrayDatastore(valY_) ...
 );
 
-dsTest = combine(
-    arrayDatastore(testX, "IterationDimension", 4), ...
-    arrayDatastore(testY)
+dsTest = combine( ...
+    arrayDatastore(testX, 'IterationDimension', 4), ...
+    arrayDatastore(testY) ...
 );
 
 end
@@ -105,8 +105,8 @@ if isTrain
     Y = zeros(N,1,'int32');
     idx = 1;
     for b = 1:5
-        batchPath = fullfile(cifarMatDir, sprintf("data_batch_%d.mat", b));
-        S = load(batchPath, "data", "labels");
+        batchPath = fullfile(cifarMatDir, sprintf('data_batch_%d.mat', b));
+        S = load(batchPath, 'data', 'labels');
         imgs = reshapeCifarBatch(S.data);
         n = size(imgs,4);
         X(:,:,:,idx:idx+n-1) = imgs;
@@ -114,8 +114,8 @@ if isTrain
         idx = idx + n;
     end
 else
-    batchPath = fullfile(cifarMatDir, "test_batch.mat");
-    S = load(batchPath, "data", "labels");
+    batchPath = fullfile(cifarMatDir, 'test_batch.mat');
+    S = load(batchPath, 'data', 'labels');
     X = reshapeCifarBatch(S.data);
     Y = int32(S.labels);
 end
