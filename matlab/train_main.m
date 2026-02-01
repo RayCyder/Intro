@@ -315,18 +315,94 @@ end
 end
 
 function n = safeNumObs(ds)
-%safeNumObs  Best-effort NumObservations for combined datastore
+%safeNumObs  Best-effort number of observations for a datastore.
+%
+% Different MATLAB versions expose different APIs/properties:
+%   - ds.NumObservations
+%   - numobservations(ds)
+%   - combined datastore: ds.Datastores or ds.UnderlyingDatastores
+
 n = -1;
+
+% 1) Direct property (newer versions)
 try
-    uds = ds.UnderlyingDatastores;
-    if iscell(uds) && ~isempty(uds)
-        d0 = uds{1};
-        if isprop(d0,'NumObservations')
-            n = d0.NumObservations;
+    if isprop(ds, 'NumObservations')
+        n = ds.NumObservations;
+        if ~isempty(n) && isnumeric(n) && isfinite(n) && n >= 0
+            return;
         end
     end
 catch
 end
+
+% 2) Function (newer versions)
+try
+    n2 = numobservations(ds);
+    if ~isempty(n2) && isnumeric(n2) && isfinite(n2) && n2 >= 0
+        n = n2;
+        return;
+    end
+catch
+end
+
+% 3) Combined datastore: try to access first underlying datastore
+uds = [];
+try
+    if isprop(ds, 'Datastores')
+        uds = ds.Datastores;
+    elseif isprop(ds, 'UnderlyingDatastores')
+        uds = ds.UnderlyingDatastores;
+    end
+catch
+end
+
+try
+    if ~isempty(uds)
+        if iscell(uds)
+            d0 = uds{1};
+        else
+            % some versions may store as a vector of datastores
+            d0 = uds(1);
+        end
+
+        % Try the same strategies on the underlying datastore
+        if isprop(d0, 'NumObservations')
+            n = d0.NumObservations;
+            if ~isempty(n) && isnumeric(n) && isfinite(n) && n >= 0
+                return;
+            end
+        end
+
+        try
+            n2 = numobservations(d0);
+            if ~isempty(n2) && isnumeric(n2) && isfinite(n2) && n2 >= 0
+                n = n2;
+                return;
+            end
+        catch
+        end
+
+        % Last resort for arrayDatastore: size of the underlying data
+        try
+            if isprop(d0, 'UnderlyingDatastore')
+                d0 = d0.UnderlyingDatastore;
+            end
+        catch
+        end
+
+        try
+            if isprop(d0, 'Data')
+                n = size(d0.Data, 1);
+                if isnumeric(n) && isfinite(n) && n >= 0
+                    return;
+                end
+            end
+        catch
+        end
+    end
+catch
+end
+
 end
 
 function gnorm = gradL2Norm(grads)
