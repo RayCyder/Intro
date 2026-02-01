@@ -57,16 +57,40 @@ classNames = cellstr(meta.label_names);
 trainY = categorical(classNames(double(trainYNum)+1), classNames);
 testY  = categorical(classNames(double(testYNum)+1),  classNames);
 
-% Split train into train/val by 9:1 (or user-specified valRatio)
+% Split train into train/val by valRatio with per-class stratification (PyTorch-aligned)
 N = size(trainX, 4);
 valRatio = max(0, min(0.5, valRatio));
-numVal = round(N * valRatio);
-numTrain = N - numVal;
 
 rng(seed);
-perm = randperm(N);
-trainIdx = perm(1:numTrain);
-valIdx   = perm(numTrain+1:end);
+trainIdx = [];
+valIdx   = [];
+
+% Stratify using numeric labels 0..9 (stored in trainYNum)
+for k = 0:9
+    idxK = find(trainYNum == k);
+    nk = numel(idxK);
+    if nk == 0
+        continue;
+    end
+
+    //permK = idxK(randperm(nk));
+    permK = idxK; % keep class order (no shuffle)
+    numValK = round(nk * valRatio);
+
+    % Ensure both splits are non-empty when possible
+    if nk >= 2
+        numValK = min(max(numValK, 1), nk-1);
+    else
+        numValK = min(numValK, nk);
+    end
+
+    valIdx   = [valIdx;   permK(1:numValK)];
+    trainIdx = [trainIdx; permK(numValK+1:end)];
+end
+
+% Shuffle final indices so batches mix classes
+trainIdx = trainIdx(randperm(numel(trainIdx)));
+valIdx   = valIdx(randperm(numel(valIdx)));
 
 trainX_ = trainX(:,:,:,trainIdx);
 trainY_ = trainY(trainIdx);

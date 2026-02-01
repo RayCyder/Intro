@@ -36,6 +36,12 @@ cfg.weightDecay = 5e-4;
 cfg.precision   = 'single';                      % keep numeric types consistent
 cfg.printEvery  = 50;
 
+cfg.evalOnTest   = true;                       % whether to also evaluate on test each epoch
+cfg.printPerClass = false;                     % per-class metrics on val/test (slower, prints a lot)
+cfg.saveHistory  = true;                       % save losses/accs to .mat at end
+cfg.plotHistory  = true;                       % plot curves at end
+cfg.outDir       = fullfile(pwd,'runs');       % where to save history
+
 % Optimizer selection: 'adamw' or 'mvr2'
 cfg.optimizer   = 'adamw';
 
@@ -69,28 +75,33 @@ if nTrain >= 0
 else
     logMsg('Dataset sizes: (NumObservations unavailable)');
 end
+
 logMsg(sprintf('Classes (%d): %s', numel(classNames), strjoin(classNames(:).', ', ')));
+
+% Training-only augmentation (PyTorch-aligned): RandomCrop(32,pad=4) + RandomHorizontalFlip
+augTrain = data.cifar10Augmenter('OutputSize', [32 32], 'Padding', 4, 'FlipProb', 0.5);
+logMsg('Augmentation: train=RandomCrop(pad=4)+HFlip(0.5), val/test=none');
 
 mbqTrain = minibatchqueue(dsTrain, ...
     'MiniBatchSize', cfg.batchSize, ...
-    'MiniBatchFcn', @(X,Y) preprocessMiniBatchAny(X,Y,classNames,cfg), ...
+    'MiniBatchFcn', @(X,Y) data.preprocessMiniBatch(X,Y,classNames,cfg,'Augmenter',augTrain), ...
     'MiniBatchFormat', {'SSCB','CB'}, ...
     'PartialMiniBatch','discard');
 
 mbqVal = minibatchqueue(dsVal, ...
     'MiniBatchSize', cfg.batchSize, ...
-    'MiniBatchFcn', @(X,Y) preprocessMiniBatchAny(X,Y,classNames,cfg), ...
+    'MiniBatchFcn', @(X,Y) data.preprocessMiniBatch(X,Y,classNames,cfg), ...
     'MiniBatchFormat', {'SSCB','CB'}, ...
     'PartialMiniBatch','discard');
 
 mbqTest = minibatchqueue(dsTest, ...
     'MiniBatchSize', cfg.batchSize, ...
-    'MiniBatchFcn', @(X,Y) preprocessMiniBatchAny(X,Y,classNames,cfg), ...
+    'MiniBatchFcn', @(X,Y) data.preprocessMiniBatch(X,Y,classNames,cfg), ...
     'MiniBatchFormat', {'SSCB','CB'}, ...
     'PartialMiniBatch','discard');
 
 logMsg('minibatchqueue created: Train/Val/Test');
-logMsg(sprintf('  MiniBatchSize=%d | Formats={%s,%s}', cfg.batchSize, 'SSCB', 'CB'));
+logMsg(sprintf('  MiniBatchSize=%d | Formats={%s,%s} | TrainAug=ON', cfg.batchSize, 'SSCB', 'CB'));
 
 %% ========= Model =========
 lgraph = models.resnet18_cifar10_layerGraph(cfg.numClasses, cfg.inputSize);
@@ -130,6 +141,20 @@ end
 
 %% ========= Train =========
 iteration = 0;
+% ---- History (epoch-level) ----
+trainLossHist = zeros(cfg.numEpochs,1);
+trainAccHist  = zeros(cfg.numEpochs,1);
+valLossHist   = zeros(cfg.numEpochs,1);
+valAccHist    = zeros(cfg.numEpochs,1);
+
+if cfg.evalOnTest
+    testLossHist  = zeros(cfg.numEpochs,1);
+    testAccHist   = zeros(cfg.numEpochs,1);
+else
+    testLossHist  = [];
+    testAccHist   = [];
+end
+
 printedFirstBatch = false;          % print shapes once for quick debugging
 printedFirstEpochBatch = false;     % print shapes at epoch 1 first iter
 
@@ -145,6 +170,10 @@ for epoch = 1:cfg.numEpochs
 
     tEpoch = tic;
     runningLoss = 0;
+    epochLossSum = 0;
+    epochNumBatches = 0;
+    epochCorrect = 0;
+    epochTotal = 0;
 
     while hasdata(mbqTrain)
         iteration = iteration + 1;
@@ -191,6 +220,31 @@ for epoch = 1:cfg.numEpochs
         end
 
         runningLoss = runningLoss + lossVal;
+        epochLossSum = epochLossSum + lossVal;
+        epochNumBatches = epochNumBatches + 1;
+
+        % --- Train accuracy accumulation (printed once per epoch) ---
+        logitsAcc = forward(net, X);
+        if ndims(logitsAcc) == 4
+            logitsAcc = squeeze(logitsAcc);
+        end
+        isFormatted = false;
+        if isa(logitsAcc,'dlarray')
+            try
+                isFormatted = ~isempty(dims(logitsAcc));
+            catch
+                isFormatted = false;
+            end
+        end
+        if isFormatted
+            Pacc = softmax(logitsAcc);
+        else
+            Pacc = softmax(logitsAcc, 'DataFormat', 'CB');
+        end
+        [~, predAcc] = max(gather(extractdata(Pacc)), [], 1);
+        [~, gtAcc]   = max(gather(extractdata(T)),    [], 1);
+        epochCorrect = epochCorrect + sum(predAcc == gtAcc);
+        epochTotal   = epochTotal   + numel(gtAcc);
 
         % exact MVR2: compute grads on old parameters (same batch)
         if strcmpi(cfg.optimizer,'mvr2') && ~opt.IsApprox
@@ -216,75 +270,93 @@ for epoch = 1:cfg.numEpochs
         end
     end
 
-    % eval at epoch end (no weight updates)
+    % ---- Epoch summary (printed once per epoch) ----
+    trainLoss = epochLossSum / max(epochNumBatches,1);
+    trainAcc  = epochCorrect / max(epochTotal,1);
+
     logMsg('Running evaluation (val/test)...');
+
+    % Overall metrics (val)
     [valAcc, valLoss] = utils.evaluate(net, mbqVal, useGPU);
-    [testAcc, testLoss] = utils.evaluate(net, mbqTest, useGPU);
-    fprintf('==> Epoch %3d done (%.1fs) | Val Acc %.2f%% | Val Loss %.4f | Test Acc %.2f%% | Test Loss %.4f\n', ...
-        epoch, toc(tEpoch), valAcc*100, valLoss, testAcc*100, testLoss);
-    logMsg(sprintf('Epoch %d end', epoch));
+
+    % Optionally also compute test metrics
+    if cfg.evalOnTest
+        [testAcc, testLoss] = utils.evaluate(net, mbqTest, useGPU);
+    else
+        testAcc = NaN; testLoss = NaN;
+    end
+
+    % Optional per-class printing ONLY for val/test
+    if cfg.printPerClass
+        fprintf('Validation per-class metrics:\n');
+        utils.evaluatePerClass(net, mbqVal, useGPU, classNames);
+        if cfg.evalOnTest
+            fprintf('Test per-class metrics:\n');
+            utils.evaluatePerClass(net, mbqTest, useGPU, classNames);
+        end
+    end
+
+    % Record history for plotting
+    trainLossHist(epoch) = trainLoss;
+    trainAccHist(epoch)  = trainAcc;
+    valLossHist(epoch)   = valLoss;
+    valAccHist(epoch)    = valAcc;
+    if cfg.evalOnTest
+        testLossHist(epoch) = testLoss;
+        testAccHist(epoch)  = testAcc;
+    end
+
+    % Python-like single-line summary
+    if cfg.evalOnTest
+        fprintf('[%3d] time: %.1fs train_loss: %.4f train_acc: %.2f%%  val_loss: %.4f val_acc: %.2f%%  test_loss: %.4f test_acc: %.2f%%  lr: %.6f\n', ...
+            epoch, toc(tEpoch), trainLoss, trainAcc*100, valLoss, valAcc*100, testLoss, testAcc*100, opt.LR);
+    else
+        fprintf('[%3d] time: %.1fs train_loss: %.4f train_acc: %.2f%%  val_loss: %.4f val_acc: %.2f%%  lr: %.6f\n', ...
+            epoch, toc(tEpoch), trainLoss, trainAcc*100, valLoss, valAcc*100, opt.LR);
+    end
 end
 
-function [X, T] = preprocessMiniBatchAny(X, Y, classNames, cfg)
-    % Accept either cell-array images (imageDatastore pipeline) or 4-D arrays (arrayDatastore pipeline).
-    if iscell(X)
-        X = cat(4, X{:});
+% ---- Save history + plot (optional) ----
+history = struct();
+history.trainLoss = trainLossHist;
+history.trainAcc  = trainAccHist;
+history.valLoss   = valLossHist;
+history.valAcc    = valAccHist;
+history.testLoss  = testLossHist;
+history.testAcc   = testAccHist;
+history.cfg       = cfg;
+
+if cfg.saveHistory
+    if ~exist(cfg.outDir, 'dir')
+        mkdir(cfg.outDir);
+    end
+    stamp = datestr(now, 'yyyymmdd_HHMMSS');
+    outPath = fullfile(cfg.outDir, ['run_' stamp '.mat']);
+    save(outPath, 'history');
+    logMsg(['Saved history to: ' outPath]);
+end
+
+if cfg.plotHistory
+    figure('Name','Training Curves');
+    subplot(2,1,1);
+    plot(trainLossHist, '-'); hold on; plot(valLossHist, '-');
+    if cfg.evalOnTest, plot(testLossHist, '-'); end
+    grid on; xlabel('Epoch'); ylabel('Loss');
+    if cfg.evalOnTest
+        legend('train','val','test','Location','best');
+    else
+        legend('train','val','Location','best');
     end
 
-    X = im2single(X);
-
-    meanRGB = reshape(single([0.4914 0.4822 0.4465]), 1,1,3);
-    stdRGB  = reshape(single([0.2023 0.1994 0.2010]),  1,1,3);
-    X = (X - meanRGB) ./ stdRGB;
-
-    X = dlarray(X, 'SSCB');
-
-    % ---- Robust label handling for different minibatchqueue outputs ----
-    % From arrayDatastore of categorical scalars, minibatchqueue may return Y as a cell array.
-    if iscell(Y)
-        if isempty(Y)
-            Y = categorical([], classNames);
-        elseif all(cellfun(@iscategorical, Y))
-            % Cell array of scalar categoricals -> convert to cellstr of names
-            Y = categorical(cellfun(@char, Y, 'UniformOutput', false), classNames);
-        elseif all(cellfun(@isnumeric, Y))
-            % Cell array of numeric scalars (0..9)
-            Yn = cell2mat(Y);
-            Y = categorical(classNames(double(Yn)+1), classNames);
-        else
-            % Assume cellstr / string-like
-            Y = categorical(Y, classNames);
-        end
+    subplot(2,1,2);
+    plot(trainAccHist*100, '-'); hold on; plot(valAccHist*100, '-');
+    if cfg.evalOnTest, plot(testAccHist*100, '-'); end
+    grid on; xlabel('Epoch'); ylabel('Accuracy (%)');
+    if cfg.evalOnTest
+        legend('train','val','test','Location','best');
+    else
+        legend('train','val','Location','best');
     end
-
-    % If still not categorical, convert.
-    if ~iscategorical(Y)
-        if isnumeric(Y)
-            % CIFAR-10 numeric labels are typically 0..9
-            Y = categorical(classNames(double(Y)+1), classNames);
-        else
-            Y = categorical(Y, classNames);
-        end
-    end
-
-    % Ensure category set and order matches classNames without re-constructing categoricals.
-    Y = setcats(Y, classNames);
-    Y = reordercats(Y, classNames);
-
-    if any(isundefined(Y))
-        error('Found undefined labels in mini-batch. Check classNames alignment.');
-    end
-
-    % onehotencode expands along a singleton dimension. Y is typically Bx1, so expand along dim=2
-    % to get BxK, then transpose to KxB for 'CB' format.
-    Y = Y(:);  % ensure column
-    T = onehotencode(Y, 2, 'ClassNames', classNames);  % BxK
-    T = T.';   % KxB
-
-    T = dlarray(single(T), 'CB');
-
-    X = cast(X, cfg.precision);
-    T = cast(T, cfg.precision);
 end
 
 function logMsg(msg)
