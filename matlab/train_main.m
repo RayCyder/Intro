@@ -8,7 +8,7 @@ utils.setSeed(888);     % deterministic training runs
 useGPU = canUseGPU();   % decide device once; keep loop clean
 
 %% ========= Config =========
-cfg.dataRoot    = fullfile(pwd, "cifar10");      % CIFAR-10 cache directory (will download/extract .mat batches here)
+cfg.dataRoot    = fullfile(pwd, 'cifar10');      % CIFAR-10 cache directory (will download/extract .mat batches here)
 cfg.numClasses  = 10;
 cfg.inputSize   = [32 32 3];
 
@@ -19,11 +19,11 @@ cfg.baseLR      = 0.05/4;                        % align with python baseline
 cfg.minLR       = cfg.baseLR * 0.1;
 cfg.weightDecay = 5e-4;
 
-cfg.precision   = "single";                      % keep numeric types consistent
+cfg.precision   = 'single';                      % keep numeric types consistent
 cfg.printEvery  = 50;
 
-% Optimizer selection: "adamw" or "mvr2"
-cfg.optimizer   = "adamw";
+% Optimizer selection: 'adamw' or 'mvr2'
+cfg.optimizer   = 'adamw';
 
 % MVR2 (Muon) hyperparams
 cfg.mvr2.mu       = 0.95;
@@ -123,7 +123,7 @@ for epoch = 1:cfg.numEpochs
         if mod(iteration, cfg.printEvery) == 0
             avgLoss = runningLoss / cfg.printEvery;
             runningLoss = 0;
-            fprintf("Epoch %3d/%3d | Iter %6d | LR %.4g | Loss %.4f\n", ...
+            fprintf('Epoch %3d/%3d | Iter %6d | LR %.4g | Loss %.4f\n', ...
                 epoch, cfg.numEpochs, iteration, opt.LR, avgLoss);
         end
     end
@@ -131,7 +131,7 @@ for epoch = 1:cfg.numEpochs
     % eval at epoch end (no weight updates)
     [valAcc, valLoss] = utils.evaluate(net, mbqVal, useGPU);
     [testAcc, testLoss] = utils.evaluate(net, mbqTest, useGPU);
-    fprintf("==> Epoch %3d done (%.1fs) | Val Acc %.2f%% | Val Loss %.4f | Test Acc %.2f%% | Test Loss %.4f\n", ...
+    fprintf('==> Epoch %3d done (%.1fs) | Val Acc %.2f%% | Val Loss %.4f | Test Acc %.2f%% | Test Loss %.4f\n', ...
         epoch, toc(tEpoch), valAcc*100, valLoss, testAcc*100, testLoss);
 end
 
@@ -149,8 +149,25 @@ function [X, T] = preprocessMiniBatchAny(X, Y, classNames, cfg)
 
     X = dlarray(X, 'SSCB');
 
+    % Labels may already be categorical (from arrayDatastore). Only convert if needed.
+    if ~iscategorical(Y)
+        if isnumeric(Y)
+            % CIFAR-10 numeric labels are typically 0..9
+            Y = categorical(classNames(double(Y)+1), classNames);
+        else
+            Y = categorical(Y, classNames);
+        end
+    end
+
+    % Ensure category set/order matches classNames
     Y = categorical(Y, classNames);
+
     T = onehotencode(Y, 1, 'ClassNames', classNames);
+
+    if any(isundefined(Y))
+        error('Found undefined labels in mini-batch. Check classNames alignment.');
+    end
+
     T = dlarray(single(T), 'CB');
 
     X = cast(X, cfg.precision);
