@@ -73,7 +73,7 @@ for k = 0:9
         continue;
     end
 
-    //permK = idxK(randperm(nk));
+    %permK = idxK(randperm(nk));
     permK = idxK; % keep class order (no shuffle)
     numValK = round(nk * valRatio);
 
