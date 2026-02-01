@@ -44,7 +44,7 @@ cfg.plotHistory  = true;                       % plot curves at end
 cfg.outDir       = fullfile(pwd,'runs');       % where to save history
 
 % Quick debug subset (to validate the pipeline fast)
-cfg.debugSubset = false;           % set true to use tiny datasets
+cfg.debugSubset = true;           % set true to use tiny datasets
 cfg.debugTrainN = 100;
 cfg.debugValN   = 10;
 cfg.debugTestN  = 10;
