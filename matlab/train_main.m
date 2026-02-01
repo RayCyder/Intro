@@ -8,7 +8,7 @@ utils.setSeed(888);     % deterministic training runs
 useGPU = canUseGPU();   % decide device once; keep loop clean
 
 %% ========= Config =========
-cfg.dataRoot    = fullfile(pwd, "cifar10");      % CIFAR-10 root: train/ + test/ folders
+cfg.dataRoot    = fullfile(pwd, "cifar10");      % CIFAR-10 cache directory (will download/extract .mat batches here)
 cfg.numClasses  = 10;
 cfg.inputSize   = [32 32 3];
 
@@ -33,25 +33,23 @@ cfg.mvr2.nSteps   = 3;
 cfg.mvr2.isApprox = true;  % true: approx (faster); false: exact (extra backward)
 
 %% ========= Data =========
-[dsTrain, dsTest, classNames] = data.makeCIFAR10Datastores(cfg.dataRoot);
+[dsTrain, dsVal, dsTest, classNames] = data.makeCIFAR10Datastores(cfg.dataRoot, "ValRatio", 0.1, "Seed", 888);
 
-augTrain = augmentedImageDatastore(cfg.inputSize, dsTrain, ...
-    "DataAugmentation", data.cifar10Augmenter(), ...
-    "ColorPreprocessing","none");
-
-augTest  = augmentedImageDatastore(cfg.inputSize, dsTest, ...
-    "ColorPreprocessing","none");
-
-% minibatchqueue produces dlarray batches + one-hot labels
-mbqTrain = minibatchqueue(augTrain, ...
+mbqTrain = minibatchqueue(dsTrain, ...
     "MiniBatchSize", cfg.batchSize, ...
-    "MiniBatchFcn", @(X,Y) data.preprocessMiniBatch(X,Y,classNames,cfg), ...
+    "MiniBatchFcn", @(X,Y) preprocessMiniBatchAny(X,Y,classNames,cfg), ...
     "MiniBatchFormat", {"SSCB","CB"}, ...
     "PartialMiniBatch","discard");
 
-mbqTest = minibatchqueue(augTest, ...
+mbqVal = minibatchqueue(dsVal, ...
     "MiniBatchSize", cfg.batchSize, ...
-    "MiniBatchFcn", @(X,Y) data.preprocessMiniBatch(X,Y,classNames,cfg), ...
+    "MiniBatchFcn", @(X,Y) preprocessMiniBatchAny(X,Y,classNames,cfg), ...
+    "MiniBatchFormat", {"SSCB","CB"}, ...
+    "PartialMiniBatch","discard");
+
+mbqTest = minibatchqueue(dsTest, ...
+    "MiniBatchSize", cfg.batchSize, ...
+    "MiniBatchFcn", @(X,Y) preprocessMiniBatchAny(X,Y,classNames,cfg), ...
     "MiniBatchFormat", {"SSCB","CB"}, ...
     "PartialMiniBatch","discard");
 
@@ -131,9 +129,32 @@ for epoch = 1:cfg.numEpochs
     end
 
     % eval at epoch end (no weight updates)
+    [valAcc, valLoss] = utils.evaluate(net, mbqVal, useGPU);
     [testAcc, testLoss] = utils.evaluate(net, mbqTest, useGPU);
-    fprintf("==> Epoch %3d done (%.1fs) | Test Acc %.2f%% | Test Loss %.4f\n", ...
-        epoch, toc(tEpoch), testAcc*100, testLoss);
+    fprintf("==> Epoch %3d done (%.1fs) | Val Acc %.2f%% | Val Loss %.4f | Test Acc %.2f%% | Test Loss %.4f\n", ...
+        epoch, toc(tEpoch), valAcc*100, valLoss, testAcc*100, testLoss);
+end
+
+function [X, T] = preprocessMiniBatchAny(X, Y, classNames, cfg)
+    % Accept either cell-array images (imageDatastore pipeline) or 4-D arrays (arrayDatastore pipeline).
+    if iscell(X)
+        X = cat(4, X{:});
+    end
+
+    X = im2single(X);
+
+    meanRGB = reshape(single([0.4914 0.4822 0.4465]), 1,1,3);
+    stdRGB  = reshape(single([0.2023 0.1994 0.2010]),  1,1,3);
+    X = (X - meanRGB) ./ stdRGB;
+
+    X = dlarray(X, "SSCB");
+
+    Y = categorical(Y, classNames);
+    T = onehotencode(Y, 1, "ClassNames", classNames);
+    T = dlarray(single(T), "CB");
+
+    X = cast(X, cfg.precision);
+    T = cast(T, cfg.precision);
 end
 
 end
