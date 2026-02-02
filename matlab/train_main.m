@@ -37,7 +37,7 @@ cfg.precision   = 'single';                      % keep numeric types consistent
 cfg.printEvery  = 50;
 
 cfg.evalOnTest   = true;                       % whether to also evaluate on test each epoch
-cfg.printPerClass = false;                     % per-class metrics on val/test (slower, prints a lot)
+cfg.printPerClass = true;                     % per-class metrics on val/test (slower, prints a lot)
 cfg.saveHistory  = true;                       % save losses/accs to .mat at end
 cfg.plotHistory  = true;                       % plot curves at end
 
