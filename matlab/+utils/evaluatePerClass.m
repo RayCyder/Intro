@@ -84,9 +84,8 @@ avgLoss = lossSum / max(numBatches,1);
 accPerClass = correctPerClass ./ max(countPerClass, 1);
 accPerClass(countPerClass == 0) = NaN;
 
-% Optional printing (Python-like)
+% Optional printing: per-class lines only (no header / no overall line)
 if nargin >= 4 && ~isempty(classNames)
-    fprintf('Per-class accuracy:\n');
     for c = 1:numel(classNames)
         if c <= numel(accPerClass)
             if isnan(accPerClass(c))
@@ -96,7 +95,6 @@ if nargin >= 4 && ~isempty(classNames)
             end
         end
     end
-    fprintf('Overall Acc: %.2f%% | Avg Loss: %.4f\n', accOverall*100, avgLoss);
 end
 
 end
